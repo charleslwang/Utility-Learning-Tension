@@ -1,4 +1,4 @@
-# 🤖 The Utility-Learning Tension: Learnability in Self-Modifying Systems
+# The Utility-Learning Tension: Learnability in Self-Modifying Systems
 
 This repository contains the source for our paper exploring a fundamental safety risk in advanced AI: the structural conflict between maximizing utility and preserving the ability to learn.
 
@@ -41,11 +41,11 @@ We claim that all forms of self-improvement can be broken down into five categor
 
 Our analysis, focused on the Representational (`H`) axis and extended to the others, produced two key results:
 
-### 💥 Finding 1: Rationality Can Lead to Self-Destruction
+### Finding 1: Rationality Can Lead to Self-Destruction
 
 Under a plausible utility function that rewards performance and capacity, an agent with the ability to arbitrarily increase its own complexity **will rationally choose to do so**, even though it breaks its ability to learn in the PAC (Probably Approximately Correct) sense.
 
-### 🔪 Finding 2: A Sharp Boundary for Safety
+### Finding 2: A Sharp Boundary for Safety
 
 We prove a necessary and sufficient condition for preserving learnability during self-modification.
 
