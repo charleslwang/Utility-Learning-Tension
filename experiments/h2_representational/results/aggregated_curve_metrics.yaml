@@ -1,0 +1,22 @@
+destructive::lambda_dest_0.01:
+  aom_mean: 35.007060000000024
+  gen_gap_slope_mean: -0.00018281061313414282
+  k_elbow: 39.0
+  k_star: null
+destructive::lambda_dest_0.05:
+  aom_mean: 35.007060000000024
+  gen_gap_slope_mean: -0.00018281061313414282
+  k_elbow: 39.0
+  k_star: null
+two_gate::K_5_tau_0.002_delta_0.2_c_0.5:
+  aom_mean: 1.5341199999999997
+  k_elbow: null
+  k_star: null
+two_gate::K_6_tau_0.002_delta_0.2_c_0.5:
+  aom_mean: 1.5341199999999997
+  k_elbow: null
+  k_star: null
+two_gate::K_7_tau_0.002_delta_0.2_c_0.5:
+  aom_mean: 1.5341199999999997
+  k_elbow: null
+  k_star: null

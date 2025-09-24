@@ -1,0 +1,21 @@
+# data
+d_star: 5
+m_values: [150, 300, 600]
+noise_levels: [0.0, 0.1, 0.2, 0.3]
+val_ratio: 0.2
+test_size: 50000
+seed_base: 42
+
+# model
+lambda_reg: 1e-9   # weaker L2 -> larger C -> more overfit
+max_degree: 40
+
+# policies
+destructive_lambdas: [0.01, 0.05]
+K_values: [5, 6, 7]
+tau: 0.002
+delta: 0.2
+c: 0.5
+
+# run
+max_steps: 100
