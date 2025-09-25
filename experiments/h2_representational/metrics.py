@@ -1,7 +1,7 @@
-"""Metrics, breakpoints, and plotting utilities."""
+"""Metrics, breakpoints, and plotting utilities (polished)."""
 import os
 import logging
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# ----- Breakpoints on aggregated curves -----
+# ===== Breakpoints on aggregated curves =====================================
 
-def compute_breakpoints_on_group(df_group: pd.DataFrame):
+def compute_breakpoints_on_group(df_group: pd.DataFrame) -> Tuple[Optional[float], Optional[float]]:
     """
     Compute k* (one-SE rule if SEM present) and knee (Kneedle) on aggregated mean curves.
     Expect columns: d, test_error_mean, optionally test_error_sem.
@@ -41,7 +41,7 @@ def compute_breakpoints_on_group(df_group: pd.DataFrame):
         pass
     return k_star, k_elbow
 
-# ----- Aggregated metrics -----
+# ===== Aggregated metrics ====================================================
 
 def compute_metrics_aggregated(agg_df: pd.DataFrame, d_star: int) -> Dict[str, Dict]:
     """
@@ -71,7 +71,7 @@ def compute_metrics_aggregated(agg_df: pd.DataFrame, d_star: int) -> Dict[str, D
                 except Exception:
                     metrics['gen_gap_slope_mean'] = np.nan
 
-        # k* & knee (assume merged externally or compute again here)
+        # k* & knee
         k_star, k_elbow = compute_breakpoints_on_group(dfp)
         metrics['k_star'] = k_star
         metrics['k_elbow'] = k_elbow
@@ -79,15 +79,35 @@ def compute_metrics_aggregated(agg_df: pd.DataFrame, d_star: int) -> Dict[str, D
         out[f'{policy}::{variant}'] = metrics
     return out
 
-# ----- Plotting -----
+# ===== Styling helpers =======================================================
 
-# ----- Styling helpers -----
+def _base_rcparams():
+    # Reproducible, print-friendly defaults (no seaborn)
+    plt.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Inter', 'IBM Plex Sans', 'DejaVu Sans', 'Helvetica', 'Arial'],
+        'axes.titlesize': 13,
+        'axes.labelsize': 12,
+        'xtick.labelsize': 11,
+        'ytick.labelsize': 11,
+        'legend.fontsize': 10,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'axes.edgecolor': '#C9CED6',
+        'axes.linewidth': 0.9,
+        'grid.color': '#AEB6C2',
+        'grid.alpha': 0.18,
+        'grid.linestyle': '-',
+        'axes.grid': True,
+        'axes.axisbelow': True,
+        'figure.constrained_layout.use': True,
+    })
 
 def get_color_and_style(policy: str, variant: str, variant_styles: dict) -> dict:
     """Consistent, print-friendly styling for each (policy, variant)."""
     key = f"{policy}:{variant}"
     if key not in variant_styles:
-        # Tol colorblind-safe palette (expanded)
+        # Tol colorblind-safe palette + alt set
         tol = [
             "#332288", "#88CCEE", "#44AA99", "#117733", "#999933",
             "#DDCC77", "#CC6677", "#882255", "#AA4499", "#6699CC",
@@ -97,108 +117,74 @@ def get_color_and_style(policy: str, variant: str, variant_styles: dict) -> dict
             "#e6ab02", "#a6761d", "#666666", "#1f77b4", "#9467bd",
         ]
         base_palette = tol if policy == 'two_gate' else alt
-
         # Rotate per-policy for stable assignment
         idx = len([k for k in variant_styles if k.startswith(policy + ":")]) % len(base_palette)
         color = base_palette[idx]
 
         if policy == 'two_gate':
             style = dict(
-                lw=2.25,
-                alpha=0.95,
-                marker='o',
-                ms=5.5,
-                linestyle='-',
-                zorder=10,
-                markeredgewidth=0.9,
-                markerfacecolor='white',
+                lw=2.3, alpha=0.96, marker='o', ms=5.6, linestyle='-',
+                zorder=10, markeredgewidth=1.0, markerfacecolor='white',
                 markeredgecolor=color,
             )
         else:  # destructive
             style = dict(
-                lw=1.6,
-                alpha=0.9,
-                marker='s',
-                ms=4.8,
-                linestyle='--',
-                zorder=6,
-                dashes=(4, 2.4),
-                markeredgewidth=0.9,
-                markerfacecolor='white',
-                markeredgecolor=color,
+                lw=1.7, alpha=0.9, marker='s', ms=4.8, linestyle='--',
+                zorder=6, dashes=(4, 2.4), markeredgewidth=0.9,
+                markerfacecolor='white', markeredgecolor=color,
             )
         variant_styles[key] = {**style, 'color': color}
     return variant_styles[key]
 
+def _stable_jitter(key, d_vals, width=0.12):
+    # Gentle jitter for categorical-ish d to de-clutter markers
+    rng = np.random.RandomState(abs(hash(key)) % 2**32)
+    return d_vals + rng.uniform(-width, width, size=len(d_vals))
 
-# ----- Plotting -----
+# ===== Plotting ==============================================================
 
 def plot_learning_curves(
     results: pd.DataFrame,
-    d_star: int,
-    save_path: str = None,
+    d_star: Optional[int],
+    save_path: Optional[str] = None,
     show: bool = True,
     facet: bool = True,
     overlay_destructive_in_two_gate: bool = True,
 ) -> plt.Figure:
     """
     Publication-grade learning curves.
-    - Faceted: left=Destructive, right=Two-Gate
-    - Two-Gate panel also overlays destructive as muted context (same x-axis scale)
+
+    - Faceted: left = Destructive, right = Two-Gate
+    - Two-Gate panel overlays destructive (muted) for context (same y, clipped x)
+    - **Two-Gate x-axis will be clipped to [d_min, min(d_max, d_star + 1)]** if d_star is provided
     """
+
+    _base_rcparams()
 
     # Determine columns
     is_agg = 'test_error_mean' in results.columns
     ycol = 'test_error_mean' if is_agg else 'test_error'
     semcol = 'test_error_sem' if is_agg and 'test_error_sem' in results.columns else None
 
-    # Global x-range (identical across panels)
-    d_min, d_max = results['d'].min(), results['d'].max()
-    x_pad = max(1, int(round(0.02 * (d_max - d_min)))) if d_max > d_min else 1
-    xlim = (d_min - x_pad, d_max + x_pad)
+    # Global x-range (for destructive); two_gate will be clipped later if requested
+    d_min, d_max = float(results['d'].min()), float(results['d'].max())
+    x_pad = max(1.0, round(0.02 * (d_max - d_min), 2)) if d_max > d_min else 1.0
+    global_xlim = (d_min - x_pad, d_max + x_pad)
 
-    # Refined rcParams (no seaborn needed for reproducibility)
-    plt.rcParams.update({
-        'font.family': 'sans-serif',
-        'font.sans-serif': ['Inter', 'IBM Plex Sans', 'DejaVu Sans', 'Helvetica', 'Arial'],
-        'axes.titlesize': 12.5,
-        'axes.labelsize': 11.5,
-        'xtick.labelsize': 10.5,
-        'ytick.labelsize': 10.5,
-        'legend.fontsize': 9.5,
-        'figure.dpi': 300,
-        'savefig.dpi': 300,
-        'axes.edgecolor': '#C9CED6',
-        'axes.linewidth': 0.8,
-        'grid.alpha': 0.18,
-        'grid.linestyle': '-',
-        'axes.grid': True,
-        'axes.axisbelow': True,
-        'figure.constrained_layout.use': False,
-    })
-
-    # Create figure/axes with adjusted layout
+    # Figure/axes
     if facet:
-        # Create figure with constrained layout and adjust bottom margin for legend
-        fig, axes = plt.subplots(1, 2, figsize=(12.0, 5.0), 
-                               gridspec_kw={'wspace': 0.3},
-                               constrained_layout=True)
-        fig.subplots_adjust(bottom=0.25)  # Make room for legend below
+        # Increase figure height to accommodate legend
+        fig, axes = plt.subplots(1, 2, figsize=(12.0, 6.5), gridspec_kw={'wspace': 0.3}, constrained_layout=True)
+        
+        # Adjust subplot parameters to make room for legend
+        fig.set_constrained_layout_pads(w_pad=0.02, h_pad=0.02, hspace=0.02, wspace=0.1)
         
         axes_map = {'destructive': axes[0], 'two_gate': axes[1]}
         axes[0].set_title('Destructive Policy', pad=10)
         axes[1].set_title('Two-Gate Policy', pad=10)
-        
-        # Set x-axis limit for two-gate policy
-        axes[1].set_xlim(0, 10)
     else:
-        fig, ax = plt.subplots(figsize=(8.6, 5.2))
+        fig, ax = plt.subplots(figsize=(9.0, 5.4))
         axes_map = {'destructive': ax, 'two_gate': ax}
-
-    # Gentle jitter for categorical-ish d to de-clutter markers
-    def jitter_for(key, d_vals, width=0.12):
-        rng = np.random.RandomState(abs(hash(key)) % 2**32)
-        return d_vals + rng.uniform(-width, width, size=len(d_vals))
 
     variant_styles = {}
     handles, labels = [], []
@@ -207,13 +193,17 @@ def plot_learning_curves(
     for (policy, variant), g in results.groupby(['policy', 'variant']):
         ax = axes_map.get(policy, list(axes_map.values())[0])
         g = g.sort_values('d').copy()
-        
-        # Filter two-gate policy to only show d <= 10
-        if policy == 'two_gate' and facet:
-            g = g[g['d'] <= 10].copy()
-            
+
+        # If we're in the two_gate panel and we have d_star, clip data & x-axis to d_star+1
+        if facet and policy == 'two_gate' and d_star is not None:
+            xmax_tg = min(d_max, float(d_star) + 1.0)
+            g = g[g['d'] <= xmax_tg].copy()
+
         x = g['d'].values
-        xj = jitter_for((policy, variant), x)
+        if len(x) == 0:
+            continue
+
+        xj = _stable_jitter((policy, variant), x)
         style = get_color_and_style(policy, variant, variant_styles)
         style_plot = {k: v for k, v in style.items() if k != 'zorder'}
         z = style.get('zorder', 7)
@@ -227,17 +217,19 @@ def plot_learning_curves(
         handles.append(h)
         labels.append(f"{policy}:{variant}")
 
-    # Optional: overlay destructive in the two-gate panel (context view)
+    # Optional: overlay destructive in the two_gate panel (context view)
     if facet and overlay_destructive_in_two_gate and 'two_gate' in axes_map and 'destructive' in results['policy'].unique():
         ax_overlay = axes_map['two_gate']
-        # draw destructive again, muted
-        for (policy, variant), g in results[results['policy'] == 'destructive'].groupby(['policy', 'variant']):
+        xmax_tg = min(d_max, float(d_star) + 1.0) if d_star is not None else d_max
+        backdrop = results[(results['policy'] == 'destructive') & (results['d'] <= xmax_tg)]
+        for (policy, variant), g in backdrop.groupby(['policy', 'variant']):
             g = g.sort_values('d').copy()
             x = g['d'].values
-            xj = jitter_for(("overlay", variant), x, width=0.06)  # smaller jitter for overlay
+            if len(x) == 0:
+                continue
+            xj = _stable_jitter(("overlay", variant), x, width=0.06)  # smaller jitter for overlay
             style = get_color_and_style('destructive', variant, variant_styles)
             z = 3  # lower z for backdrop
-            # Muted style for context (same color, thinner & more transparent)
             ax_overlay.plot(
                 xj, g[ycol].values,
                 linestyle='--', dashes=(4, 2.4),
@@ -251,62 +243,50 @@ def plot_learning_curves(
                 )
 
     # Final axis polish
-    for policy_type, ax in axes_map.items():
-        # Shared x-scale
-        ax.set_xlim(*xlim)
+    for panel, ax in axes_map.items():
+        # X-limits: destructive = global; two_gate = clipped to d_star+1 if provided
+        if panel == 'two_gate' and d_star is not None:
+            xmax_tg = min(d_max, float(d_star) + 1.0)
+            ax.set_xlim(global_xlim[0], xmax_tg)
+        else:
+            ax.set_xlim(*global_xlim)
 
         # Vertical guide at d*
         if d_star is not None:
-            ax.axvline(d_star, color='#707985', ls=(0, (3, 3)), lw=1.15, alpha=0.9, zorder=1)
+            ax.axvline(d_star, color='#707985', ls=(0, (3, 3)), lw=1.2, alpha=0.95, zorder=1)
 
         # Labels
         ax.set_xlabel('Polynomial degree (d)', labelpad=8)
-        if policy_type == 'destructive' or not facet:
+        if panel == 'destructive' or not facet:
             ax.set_ylabel('Test error', labelpad=8)
 
-        # Tick styling
-        ax.tick_params(axis='both', which='both', direction='out', length=3.5, width=0.6)
+        # Ticks & spines
+        ax.tick_params(axis='both', which='both', direction='out', length=3.6, width=0.7)
         ax.minorticks_on()
         ax.tick_params(axis='x', which='minor', length=2, width=0.5)
         ax.tick_params(axis='y', which='minor', length=2, width=0.5)
-
-        # Clean spines
         for s in ['top', 'right']:
             ax.spines[s].set_visible(False)
 
-        # Optional: harmonize y-range between panels if your results are comparable
-        # (commented out by default since you asked specifically for same x-scale)
-        # if facet:
-        #     ymins = []; ymaxs = []
-        #     for _, axx in axes_map.items():
-        #         ymins.append(axx.get_ylim()[0]); ymaxs.append(axx.get_ylim()[1])
-        #     y_shared = (min(ymins), max(ymaxs))
-        #     for _, axx in axes_map.items():
-        #         axx.set_ylim(*y_shared)
-
-    # Add centered legend below the plots
-    if facet and handles:
-        # Create a single legend for all subplots
+    # Legend
+    if facet and len(handles) > 0:
+        # Place legend below the subplots with some padding
         legend = fig.legend(
             handles, labels,
             loc='lower center',
-            bbox_to_anchor=(0.5, -0.05),  # Position below the plots
-            ncol=min(4, len(handles)),    # Adjust number of columns based on items
+            bbox_to_anchor=(0.5, -0.05),  # Position below the subplots
+            ncol=min(4, len(handles)),
             frameon=True,
-            framealpha=0.98,
-            facecolor='white',
-            edgecolor='#D8DCE3',
-            fancybox=True,
-            borderpad=0.8,
-            handlelength=2.2,
-            handletextpad=0.6,
-            columnspacing=1.2
+            fancybox=False,
+            shadow=False,
+            framealpha=1.0,
+            edgecolor='#E0E0E0',
+            bbox_transform=fig.transFigure  # Use figure coordinates
         )
-        legend.get_frame().set_linewidth(0.6)
         
         # Adjust layout to make room for the legend
-        plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Leave space at bottom for legend
-    elif handles:  # For non-faceted case
+        plt.tight_layout(rect=[0, 0.1, 1, 1])
+    else:
         legend = list(axes_map.values())[0].legend(
             handles, labels,
             loc='upper left', bbox_to_anchor=(1.02, 1.0),
@@ -316,30 +296,18 @@ def plot_learning_curves(
         legend.get_frame().set_linewidth(0.6)
 
     if facet:
-        # Subtle, non-overlapping super-title
-        fig.suptitle('Test Error vs. Model Capacity', y=1.05, fontsize=13.2, fontweight='semibold')
+        fig.suptitle('Test Error vs. Model Capacity', y=1.02, fontsize=13.2, fontweight='semibold')
 
-    # Adjust layout to make room for the legend
-    if facet:
-        # For faceted plots, we need more space on the right for the legend
-        plt.subplots_adjust(right=0.85)  # Make room for the legend
-    else:
-        # For single plots, use tight layout with padding
-        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave 15% space on the right
-    
-    # Save the figure
+    # Save / show
     if save_path:
         os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
         try:
-            # Use bbox_inches='tight' to ensure everything fits
-            fig.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
-            logger.info(f"Saved {save_path}")
-        finally:
-            plt.close(fig)
-    
-    # Show the plot if requested
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0.3)
+            logging.info(f'Saved {save_path}')
+        except Exception as e:
+            logging.error(f'Error saving figure: {e}')
     if show:
         plt.show()
-    
+
     return fig
 
