@@ -92,18 +92,29 @@ def make_synthetic(n: int,
 # -------------------------
 # Features / trainer / eval
 # -------------------------
+# core.py
 class PolyERM:
-    def __init__(self, degree: int, solver: str = 'lbfgs',
-                 C: float = 1e6, max_iter: int = 10000, tol: float = 1e-6):
-        self.pipe = Pipeline(steps=[
-            ("poly",  PolynomialFeatures(degree=degree, include_bias=False)),  # intercept comes from LR
-            ("scale", StandardScaler()),  # dense; center + scale improves conditioning
-            ("clf",   LogisticRegression(
-                        solver=solver, penalty='l2', C=C,
-                        max_iter=max_iter, tol=tol, n_jobs=-1,
-                        random_state=42
-                     ))
-        ])
+    def __init__(self, degree: int, solver: str = 'saga',
+                 C: float = 0.5, max_iter: int = 20000, tol: float = 1e-4):
+        self.degree = degree
+        if degree == 0:
+            steps = [
+                ("poly", PolynomialFeatures(degree=0, include_bias=True)),
+                ("clf",  LogisticRegression(
+                            solver=solver, penalty='l2', C=C,
+                            max_iter=max_iter, tol=tol, n_jobs=-1,
+                            random_state=42))
+            ]
+        else:
+            steps = [
+                ("poly",  PolynomialFeatures(degree=degree, include_bias=True)),
+                ("scale", StandardScaler(with_mean=False)),
+                ("clf",   LogisticRegression(
+                            solver=solver, penalty='l2', C=C,
+                            max_iter=max_iter, tol=tol, n_jobs=-1,
+                            random_state=42))
+            ]
+        self.pipe = Pipeline(steps=steps)
 
 
     def fit(self, X: NDArray, y: NDArray) -> "PolyERM":

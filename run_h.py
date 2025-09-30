@@ -96,12 +96,17 @@ def run_once(seed: int, m: int,
             val_ok = (va_new <= val_loss - (2.0 * gp_fixed.epsV + gp_fixed.tau))
             accepted = cap_ok and val_ok
         else:  # destructive
+            capacity_increases = (proposal > degree)
             if destructive_use_train:
-                accepted = (tr_new <= train_loss + destructive_slack)
+                # Accept if capacity grows AND training doesn't worsen much
+                train_ok = (tr_new <= train_loss + destructive_slack)
+                accepted = capacity_increases and train_ok
             else:
-                accepted = (va_new <= val_loss + destructive_slack)
-            cap_ok = True
-            val_ok = accepted  # for logging only (no cap gate)
+                # Accept if capacity grows AND validation doesn't worsen much
+                val_threshold_ok = (va_new <= val_loss + destructive_slack)
+                accepted = capacity_increases and val_threshold_ok
+            cap_ok = True  # no cap gate
+            val_ok = accepted  # for logging
 
         log_row(out_path, m, seed, policy_name, proposal,
                 tr_new, va_new, te_new, accepted, cap_ok, val_ok,

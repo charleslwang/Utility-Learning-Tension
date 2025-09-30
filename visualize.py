@@ -3,102 +3,118 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from pathlib import Path
+from scipy import stats
 
-# Set style
+# Styling
 sns.set_style("whitegrid")
 plt.rcParams.update({
     'font.family': 'serif',
-    'font.size': 12,
-    'figure.figsize': (10, 6),
+    'font.size': 13,
+    'figure.figsize': (12, 7),
     'savefig.dpi': 300,
     'savefig.bbox': 'tight',
-    'savefig.pad_inches': 0.3
+    'axes.labelsize': 14,
+    'axes.titlesize': 15,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 12
 })
 
-def load_and_process(policy):
-    """Load data and compute statistics."""
-    df = pd.read_csv(f'experiments/outputs/h_axis_{policy}.csv')
+PALETTE = {"Twogate": "#2E86AB", "Destructive": "#E63946"}
+
+def load_and_process(policy: str):
+    df = pd.read_csv(f"experiments/outputs/h_axis_{policy}.csv")
+    last = df.groupby('seed', as_index=False).last()
+    last['policy'] = policy.capitalize()
     
-    # Find where each seed stopped
-    last_points = df.groupby('seed').last().reset_index()
+    g = df.groupby('degree')
+    stats_df = pd.DataFrame({
+        'degree': g.size().index,
+        'mean': g['test_loss'].mean().values,
+        'sem': (g['test_loss'].std(ddof=1) / np.sqrt(g.size())).values,
+        'n': g.size().values
+    })
+    stats_df['policy'] = policy.capitalize()
+    return stats_df, last
+
+tg_stats, tg_last = load_and_process("twogate")
+ds_stats, ds_last = load_and_process("destructive")
+
+# Statistical comparison
+tg_final = tg_last['test_loss'].values
+ds_final = ds_last['test_loss'].values
+_, p_val = stats.ttest_ind(tg_final, ds_final, equal_var=False)
+mean_diff = ds_final.mean() - tg_final.mean()
+sig = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
+
+# Create figure
+fig, ax = plt.subplots()
+
+for stats_df, last_df, policy, color in [
+    (tg_stats, tg_last, 'Two-Gate', PALETTE['Twogate']),
+    (ds_stats, ds_last, 'Destructive', PALETTE['Destructive'])
+]:
+    # Main trajectory line
+    ax.plot(stats_df['degree'], stats_df['mean'], 'o-', 
+            color=color, lw=2.8, markersize=8, 
+            label=f"{policy} (final: {last_df['test_loss'].mean():.3f})",
+            markeredgecolor='white', markeredgewidth=1.5, zorder=5)
     
-    # Compute mean and std across seeds for each degree
-    stats = df.groupby('degree').agg({
-        'test_loss': ['mean', 'std', 'count'],
-        'val_loss': 'mean'
-    }).reset_index()
+    # Uncertainty band
+    ax.fill_between(stats_df['degree'], 
+                     stats_df['mean'] - stats_df['sem'],
+                     stats_df['mean'] + stats_df['sem'],
+                     alpha=0.18, color=color, linewidth=0)
     
-    # Add policy label
-    stats['policy'] = policy.capitalize()
-    last_points['policy'] = policy.capitalize()
+    # Individual seed outcomes
+    ax.scatter(last_df['degree'], last_df['test_loss'],
+               s=100, marker='*', color=color, 
+               edgecolor='black', linewidth=0.6, alpha=0.5, zorder=3)
     
-    return stats, last_points
+    # Median stopping degree
+    median_deg = last_df['degree'].median()
+    ax.axvline(median_deg, color=color, ls='--', 
+               lw=2, alpha=0.35, zorder=1)
 
-# Load both policies
-twogate_stats, twogate_last = load_and_process('twogate')
-destructive_stats, destructive_last = load_and_process('destructive')
+# Statistical annotation box
+ax.text(0.98, 0.02, f'Δ = {mean_diff:+.3f} ({sig})', 
+        transform=ax.transAxes, fontsize=12,
+        ha='right', va='bottom',
+        bbox=dict(boxstyle='round,pad=0.6', 
+                  facecolor='white', 
+                  edgecolor='gray', 
+                  linewidth=1.5,
+                  alpha=0.95))
 
-# Combine data
-all_stats = pd.concat([twogate_stats, destructive_stats])
-all_last = pd.concat([twogate_last, destructive_last])
+# Axis labels and title
+ax.set_xlabel('Polynomial Degree', fontweight='semibold')
+ax.set_ylabel('Test Loss', fontweight='semibold')
+ax.set_title('$M_H$: Capacity-Seeking vs. Bounded Growth', 
+             fontweight='bold', pad=18)
 
-# Create plot
-plt.figure(figsize=(12, 7))
+# Legend
+ax.legend(loc='upper left', framealpha=0.98, 
+          edgecolor='gray', fancybox=True)
 
-# Plot mean test loss with confidence intervals
-for policy in ['Twogate', 'Destructive']:
-    data = all_stats[all_stats['policy'] == policy]
-    plt.plot(
-        data['degree'], 
-        data[('test_loss', 'mean')],
-        'o-', 
-        label=policy,
-        linewidth=2.5
-    )
-    
-    # Add confidence intervals (mean ± std)
-    plt.fill_between(
-        data['degree'],
-        data[('test_loss', 'mean')] - data[('test_loss', 'std')],
-        data[('test_loss', 'mean')] + data[('test_loss', 'std')],
-        alpha=0.2
-    )
-    
-    # Mark stopping points
-    last = all_last[all_last['policy'] == policy]
-    plt.scatter(
-        last['degree'], 
-        last['test_loss'],
-        s=100, 
-        marker='*',
-        edgecolor='black',
-        zorder=10
-    )
+# Grid
+ax.grid(True, alpha=0.3, linewidth=0.8, linestyle='-')
+ax.set_axisbelow(True)
 
-# Add labels and title
-plt.xlabel('Polynomial Degree', fontsize=14, fontweight='bold')
-plt.ylabel('Test Loss', fontsize=14, fontweight='bold')
-plt.title('Model Selection Policy Comparison\n(Mean ± Std. Dev. across seeds)', 
-          fontsize=16, pad=20)
+# Set explicit limits to prevent clipping
+ax.set_xlim(-0.3, ax.get_xlim()[1] + 0.3)
+y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
+ax.set_ylim(ax.get_ylim()[0] - 0.02*y_range, 
+            ax.get_ylim()[1] + 0.02*y_range)
 
-# Add legend and grid
-plt.legend(title='Policy', title_fontsize=12, fontsize=11)
-plt.grid(True, alpha=0.3)
-
-# Add text annotation
-plt.annotate(
-    'TwoGate stops earlier, preventing overfitting\nwhile maintaining good performance',
-    xy=(2, 0.25), 
-    xytext=(3, 0.3),
-    arrowprops=dict(facecolor='black', shrink=0.05),
-    fontsize=11,
-    ha='center'
-)
-
-# Save high-quality figure
-output_dir = Path('figures')
-output_dir.mkdir(exist_ok=True)
-plt.savefig(output_dir / 'policy_comparison.png', dpi=300, bbox_inches='tight')
+# Save
+out_dir = Path('figures')
+out_dir.mkdir(exist_ok=True)
+plt.savefig(out_dir / 'policy_comparison_final.png', 
+            facecolor='white', edgecolor='none')
 plt.close()
 
-print(f"Figure saved to {output_dir / 'policy_comparison.png'}")
+print(f"Figure saved: {out_dir / 'policy_comparison_final.png'}")
+print(f"\nResults:")
+print(f"  Two-Gate:    {tg_final.mean():.4f} ± {tg_final.std():.4f}")
+print(f"  Destructive: {ds_final.mean():.4f} ± {ds_final.std():.4f}")
+print(f"  Difference:  {mean_diff:+.4f} (p={p_val:.4f})")
