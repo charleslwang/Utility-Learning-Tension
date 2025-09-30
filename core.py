@@ -25,73 +25,86 @@ class Capacity:
 # -------------------------
 # Data generation
 # -------------------------
-def make_synthetic(n: int, sigma: float, flip_prob: float, rng: np.random.Generator,
-                   dim: int = 1) -> Tuple[NDArray, NDArray]:
+from typing import Tuple
+import numpy as np
+from numpy.typing import NDArray
+
+def make_synthetic(n: int,
+                   sigma: float,
+                   flip_prob: float,
+                   rng: np.random.Generator,
+                   dim: int = 1,
+                   mode: str = "1d") -> Tuple[NDArray, NDArray]:
     """
-    1D binary classification with piecewise cubic + heteroskedastic noise + label flips.
-    If dim > 1, appends (dim-1) nuisance features.
+    Synthetic binary classification.
+
+    Args
+    ----
+    n : number of samples
+    sigma : noise scale
+    flip_prob : symmetric label-flip probability
+    rng : np.random.Generator
+    dim : feature dimension (for mode='1d', dim=1 means just x; dim>1 appends dim-1 nuisances)
+    mode : '1d' for piecewise-cubic-on-x, or 'logit_poly' for low-degree logit in R^dim
+
+    Returns
+    -------
+    X : (n, dim) features
+    y : (n,) {0,1} labels
     """
-    # 1. Generate input distribution: mixture of two Gaussians
-    n1 = rng.binomial(n, 0.5)
-    x1 = rng.normal(-0.5, 0.2, size=n1)
-    x2 = rng.normal(0.6, 0.25, size=n - n1)
-    x = np.concatenate([x1, x2])
-    rng.shuffle(x)
-    x = np.clip(x, -1.5, 1.5).astype(np.float32)
-    
-    # 2. Piecewise cubic latent function with kink at 0.2
-    f_x = 0.8*x - 1.6*x**2 + 0.9*x**3 + 0.8 * (x > 0.2) * (x - 0.2)**2
-    
-    # 3. Heteroskedastic noise: higher variance in the tails
-    noise_std = 0.25 + 0.35 * (np.abs(x) > 0.8)
-    epsilon = rng.normal(0, noise_std)
-    
-    # 4. Generate noisy labels
-    y_prob = f_x + epsilon
-    y = (y_prob >= 0).astype(int)
-    
-    # 5. Add label flips (10-20%)
-    flip_mask = rng.uniform(0, 1, size=n) < flip_prob
-    y[flip_mask] = 1 - y[flip_mask]
-    
-    # 6. Add nuisance dimensions if needed
-    if dim > 1:
-        z = rng.normal(0, 1, size=(n, dim-1))
-        X = np.column_stack([x.reshape(-1, 1), z])
-    else:
-        X = x.reshape(-1, 1)
-    
+    if mode == "logit_poly":
+        if dim < 2:
+            raise ValueError("mode='logit_poly' requires dim>=2")
+        X = rng.normal(0.0, 1.0, size=(n, dim)).astype(np.float32)
+        x1, x2 = X[:, 0], X[:, 1]
+        logit = 3.0*x1 - 2.0*x2 + 1.5*(x1*x2) + rng.normal(0, sigma, size=n)
+        p = 1.0 / (1.0 + np.exp(-logit))
+        y = (rng.uniform(0, 1, size=n) < p).astype(int)
+    else:  # mode == "1d"
+        # mixture on x
+        n1 = rng.binomial(n, 0.5)
+        x1 = rng.normal(-0.5, 0.2, size=n1)
+        x2 = rng.normal(0.6, 0.25, size=n - n1)
+        x = np.concatenate([x1, x2])
+        rng.shuffle(x)
+        x = np.clip(x, -1.5, 1.5).astype(np.float32)
+        # piecewise cubic
+        f_x = 0.8*x - 1.6*x**2 + 0.9*x**3 + 0.8 * (x > 0.2) * (x - 0.2)**2
+        # heteroskedastic noise
+        noise_std = sigma + 0.35 * (np.abs(x) > 0.8)
+        epsilon = rng.normal(0, noise_std)
+        y_prob = f_x + epsilon
+        y = (y_prob >= 0).astype(int)
+        # pack features
+        if dim > 1:
+            z = rng.normal(0, 1, size=(n, dim-1))
+            X = np.column_stack([x.reshape(-1, 1), z]).astype(np.float32)
+        else:
+            X = x.reshape(-1, 1).astype(np.float32)
+
+    # symmetric label flips
+    flips = rng.uniform(0, 1, size=n) < flip_prob
+    y[flips] = 1 - y[flips]
     return X, y
+
+
 
 # -------------------------
 # Features / trainer / eval
 # -------------------------
 class PolyERM:
     def __init__(self, degree: int, solver: str = 'lbfgs',
-                 C: float = 0.1, max_iter: int = 10000, tol: float = 1e-6):
-        """
-        Polynomial logistic ERM with scaling after feature expansion.
-        Smaller C = stronger L2 (more stable); higher max_iter + tighter tol to converge.
-        """
-        self.degree = degree
-        self.solver = solver
-        self.C = C
-        self.max_iter = max_iter
-        self.tol = tol
-
+                 C: float = 1e6, max_iter: int = 10000, tol: float = 1e-6):
         self.pipe = Pipeline(steps=[
-            ("poly", PolynomialFeatures(degree=degree, include_bias=True)),
-            ("scale", StandardScaler()),
+            ("poly",  PolynomialFeatures(degree=degree, include_bias=False)),  # intercept comes from LR
+            ("scale", StandardScaler()),  # dense; center + scale improves conditioning
             ("clf",   LogisticRegression(
-                        solver=self.solver,
-                        penalty='l2',
-                        C=self.C,
-                        max_iter=self.max_iter,
-                        tol=self.tol,
-                        n_jobs=-1,
+                        solver=solver, penalty='l2', C=C,
+                        max_iter=max_iter, tol=tol, n_jobs=-1,
                         random_state=42
                      ))
         ])
+
 
     def fit(self, X: NDArray, y: NDArray) -> "PolyERM":
         self.pipe.fit(X, y)
