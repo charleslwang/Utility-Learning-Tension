@@ -54,12 +54,14 @@ def run_once(seed: int, m: int,
 
     # ----- data -----
     X, y = make_synthetic(
-        n = data_cfg.m + data_cfg.n_v + data_cfg.n_test,
-        sigma = data_cfg.sigma,
-        flip_prob = data_cfg.flip_prob,
-        rng = rng,
-        dim = data_cfg.dim
+    n = data_cfg.m + data_cfg.n_v + data_cfg.n_test,
+    sigma = data_cfg.sigma,
+    flip_prob = data_cfg.flip_prob,
+    rng = rng,
+    dim = 2,  # Required for logit_poly
+    mode = "logit_poly"  # Add this
     )
+    
     X_tr = X[:data_cfg.m];          y_tr = y[:data_cfg.m]
     X_va = X[data_cfg.m:data_cfg.m+data_cfg.n_v];  y_va = y[data_cfg.m:data_cfg.m+data_cfg.n_v]
     X_te = X[-data_cfg.n_test:];    y_te = y[-data_cfg.n_test:]
