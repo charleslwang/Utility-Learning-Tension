@@ -1,4 +1,3 @@
-# experiments/utils.py
 from __future__ import annotations
 import os, random
 import numpy as np
@@ -8,7 +7,6 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 def set_all_seeds(seed: int) -> None:
-    import numpy as np, random
     random.seed(seed)
     np.random.seed(seed)
     try:
@@ -25,3 +23,4 @@ def split_indices(n_total: int, m: int, n_v: int, seed: int) -> Tuple[np.ndarray
     i_va = idx[m:m+n_v]
     i_te = idx[m+n_v:]
     return i_tr, i_va, i_te
+    

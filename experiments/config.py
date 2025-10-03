@@ -1,6 +1,5 @@
-# experiments/config.py
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 @dataclass
 class DataConfig:
@@ -22,12 +21,12 @@ class GateConfig:
 
 @dataclass
 class RunConfig:
-    # policy: "twogate" vs "destructive"
-    policy: Literal["twogate", "destructive"] = "twogate"
+    # policy label for filenames; actual logic lives in run_h.py
+    policy: Literal["twogate","dest_train","dest_val","dest_val_loose"] = "twogate"
     degree_start: int = 0
     degree_step: int = 1
     seeds: int = 20
     out_dir: str = "outputs"
-    # K(m) schedule:  floor(0.5 * sqrt(m)) by default; override with int to force.
+    # K(m) schedule:  floor(K_mult * sqrt(m)); override with int to force.
     K_schedule_multiplier: float = 0.5
-    K_override: int | None = None
+    K_override: Optional[int] = None
