@@ -1,5 +1,7 @@
 # Utility-Learning-Tension
 
+[![arXiv](https://img.shields.io/badge/arXiv-2510.04399-b31b1b.svg)](https://arxiv.org/abs/2510.04399)
+
 This repository contains code for investigating the tension between utility maximization and generalization in model selection, particularly focusing on the comparison between VC-theory based model selection and more permissive selection policies.
 
 ## Overview
@@ -8,6 +10,8 @@ The project explores how different model selection policies affect the generaliz
 
 1. **TwoGate Policy**: A VC-theory inspired approach that controls model capacity and enforces a conservative acceptance criterion based on validation performance.
 2. **Destructive Policy**: A more permissive baseline that accepts models that don't significantly worsen validation performance.
+
+For more details on the theoretical foundations and experimental results, see our paper: [**Utility-Learning Tension in Self-Modifying Agents**](https://arxiv.org/abs/2510.04399)
 
 ## Installation
 
@@ -40,7 +44,9 @@ python run_h.py \
   --K_mult 0.5 \
   --c0 2.0 \
   --tau_mult 0.5 \
-  --delta_v 0.05 \n  --sigma 0.6 \n  --flip 0.15 \
+  --delta_v 0.05 \
+  --sigma 0.6 \
+  --flip 0.15 \
   --output_dir experiments/outputs
 ```
 
@@ -77,6 +83,7 @@ python visualize.py --input_dir experiments/outputs --output_dir figures
 ## Data Generation
 
 The synthetic data is generated with the following characteristics:
+
 - Mixture of two Gaussians for input distribution
 - Piecewise cubic latent function with a kink
 - Heteroskedastic noise (higher variance in the tails)
@@ -85,12 +92,20 @@ The synthetic data is generated with the following characteristics:
 
 ## License
 
-[Add your license information here]
+This project is licensed under the Creative Commons Attribution 4.0 International License - see the [LICENSE](LICENSE) file for details or visit [https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/).
 
 ## Citation
 
 If you use this code in your research, please cite:
 
-```
-[Your citation here]
+```bibtex
+@misc{wang2025utilitylearningtensionselfmodifyingagents,
+      title={Utility-Learning Tension in Self-Modifying Agents}, 
+      author={Charles L. Wang and Keir Dorchen and Peter Jin},
+      year={2025},
+      eprint={2510.04399},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2510.04399}, 
+}
 ```
