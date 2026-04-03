@@ -175,6 +175,9 @@ def correction_audit(
     loader = make_loader(correction_split, batch_size=batch_size, shuffle=True)
     batches = list(loader)
     audited.train()
+    train_before = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
+    before_params = [parameter.detach().clone() for parameter in audited.parameters()]
+    audited.train()
     for step_idx in range(steps):
         x, y = batches[step_idx % len(batches)]
         x = x.to(device)
@@ -184,8 +187,24 @@ def correction_audit(
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
+    train_after = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
     after = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
+    param_shift_sq = 0.0
+    for before_param, after_param in zip(before_params, audited.parameters()):
+        delta = after_param.detach() - before_param
+        param_shift_sq += float(torch.sum(delta * delta).item())
     return {
+        "correction_train_pre_acc": train_before["acc"],
+        "correction_train_post_acc": train_after["acc"],
+        "correction_train_gain": train_after["acc"] - train_before["acc"],
+        "correction_train_pre_loss": train_before["loss"],
+        "correction_train_post_loss": train_after["loss"],
+        "correction_eval_pre_acc": before["acc"],
+        "correction_eval_post_acc": after["acc"],
+        "correction_eval_gain": after["acc"] - before["acc"],
+        "correction_eval_pre_loss": before["loss"],
+        "correction_eval_post_loss": after["loss"],
+        "correction_param_shift_l2": param_shift_sq ** 0.5,
         "correction_pre_acc": before["acc"],
         "correction_post_acc": after["acc"],
         "correction_gain": after["acc"] - before["acc"],
@@ -218,6 +237,9 @@ def teachability_probe(
     loader = make_loader(correction_split, batch_size=batch_size, shuffle=True)
     batches = list(loader)
     audited.train()
+    train_before = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
+    before_params = [parameter.detach().clone() for parameter in audited.parameters()]
+    audited.train()
     for step_idx in range(steps):
         x, y = batches[step_idx % len(batches)]
         x = x.to(device)
@@ -227,15 +249,30 @@ def teachability_probe(
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
+    train_after = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
     after = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
-    shift_before = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
+    param_shift_sq = 0.0
+    for before_param, after_param in zip(before_params, audited.parameters()):
+        delta = after_param.detach() - before_param
+        param_shift_sq += float(torch.sum(delta * delta).item())
     return {
+        "probe_train_pre_acc": train_before["acc"],
+        "probe_train_post_acc": train_after["acc"],
+        "probe_train_gain": train_after["acc"] - train_before["acc"],
+        "probe_train_pre_loss": train_before["loss"],
+        "probe_train_post_loss": train_after["loss"],
+        "probe_eval_pre_acc": before["acc"],
+        "probe_eval_post_acc": after["acc"],
+        "probe_eval_gain": after["acc"] - before["acc"],
+        "probe_eval_pre_loss": before["loss"],
+        "probe_eval_post_loss": after["loss"],
+        "probe_param_shift_l2": param_shift_sq ** 0.5,
         "probe_pre_acc": before["acc"],
         "probe_post_acc": after["acc"],
         "probe_gain": after["acc"] - before["acc"],
         "probe_pre_loss": before["loss"],
         "probe_post_loss": after["loss"],
-        "probe_train_acc": shift_before["acc"],
+        "probe_train_acc": train_after["acc"],
     }
 
 
