@@ -139,11 +139,14 @@ def main() -> None:
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--eval_batch_size", type=int, default=256)
-    parser.add_argument("--probe_steps", type=int, default=10)
-    parser.add_argument("--probe_lr", type=float, default=0.1)
+    parser.add_argument("--probe_steps", type=int, default=6)
+    parser.add_argument("--probe_lr", type=float, default=0.06)
     parser.add_argument("--probe_lr_scale", type=float, default=1.0)
     parser.add_argument("--probe_batch_size", type=int, default=32)
     parser.add_argument("--B", type=float, default=2.5)
+    parser.add_argument("--shift_alignment", type=float, default=-0.35)
+    parser.add_argument("--correction_alignment", type=float, default=0.0)
+    parser.add_argument("--correction_eval_alignment", type=float, default=0.0)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--output_dir", type=str, default="experiments/outputs")
     args = parser.parse_args()
@@ -168,6 +171,9 @@ def main() -> None:
                 label_noise=args.label_noise,
                 feature_noise=args.feature_noise,
                 seed=seed,
+                shift_alignment=args.shift_alignment,
+                correction_alignment=args.correction_alignment,
+                correction_eval_alignment=args.correction_eval_alignment,
             )
             model = TeachabilityMLP(args.input_dim, args.width, depth=args.depth, dropout=args.dropout).to(device)
             for parameter in model.correction_head.parameters():

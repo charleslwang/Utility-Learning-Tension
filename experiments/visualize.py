@@ -88,8 +88,11 @@ def final_rows_by_seed(df: pd.DataFrame, sort_cols: List[str]) -> pd.DataFrame:
 def load_axis_files(input_dir: str, prefix: str) -> pd.DataFrame:
     frames: List[pd.DataFrame] = []
     for file_name in sorted(os.listdir(input_dir)):
-        if file_name.startswith(prefix) and file_name.endswith(".csv"):
-            frames.append(pd.read_csv(os.path.join(input_dir, file_name)))
+        if not (file_name.startswith(prefix) and file_name.endswith(".csv")):
+            continue
+        if any(token in file_name for token in ["summary", "rebuttal", "paired_wins", "budget_excess"]):
+            continue
+        frames.append(pd.read_csv(os.path.join(input_dir, file_name)))
     if not frames:
         raise FileNotFoundError(f"No files matching {prefix}*.csv found in {input_dir}")
     return pd.concat(frames, ignore_index=True)
@@ -217,11 +220,11 @@ def plot_h_axis(input_dir: str, output_dir: str) -> None:
     pd.concat(paired_rows, ignore_index=True).to_csv(os.path.join(output_dir, "h_axis_paired_wins.csv"), index=False)
 
 
-
 def plot_a_axis(input_dir: str, output_dir: str) -> None:
     df = load_axis_files(input_dir, prefix="a_axis_")
     df["policy"] = pd.Categorical(df["policy"], categories=POLICY_ORDER_A, ordered=True)
     df = df.sort_values(["policy", "seed", "step_mass", "stage"])
+    df["budget_gap"] = df["step_mass"] - df["step_budget"]
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
     sns.lineplot(
@@ -254,6 +257,7 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
 
     final_rows = final_rows_by_seed(df, ["seed", "policy", "step_mass", "stage"])
     budget_rows = df[df["step_mass"] <= df["step_budget"] + 1e-12].sort_values(["seed", "policy", "step_mass", "stage"]).groupby(["seed", "policy"], as_index=False).tail(1)
+    overrun_rows = df[(df["policy"] == "no_cap") & (df["step_mass"] > df["step_budget"] + 1e-12)].sort_values(["seed", "step_mass", "stage"]).groupby(["seed", "policy"], as_index=False).head(1)
     summary = final_rows[["policy", "test_shift_acc", "probe_gain", "step_mass"]]
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     sns.barplot(data=summary, x="policy", y="test_shift_acc", order=POLICY_ORDER_A, palette=COLORS, ax=axes[0], errorbar=("se", 1.0))
@@ -264,37 +268,6 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
     axes[1].set_title("Final teachability probe gain")
     axes[1].set_xlabel("")
     savefig(os.path.join(output_dir, "a_axis_summary.png"))
-
-    table = final_rows.groupby("policy").agg(
-        final_step_mass_mean=("step_mass", "mean"),
-        final_step_mass_std=("step_mass", "std"),
-        final_iid_acc_mean=("test_iid_acc", "mean"),
-        final_iid_acc_std=("test_iid_acc", "std"),
-        final_shift_acc_mean=("test_shift_acc", "mean"),
-        final_shift_acc_std=("test_shift_acc", "std"),
-        final_probe_train_gain_mean=("probe_train_gain", "mean"),
-        final_probe_train_gain_std=("probe_train_gain", "std"),
-        final_probe_eval_gain_mean=("probe_eval_gain", "mean"),
-        final_probe_eval_gain_std=("probe_eval_gain", "std"),
-        final_probe_param_shift_l2_mean=("probe_param_shift_l2", "mean"),
-        final_probe_param_shift_l2_std=("probe_param_shift_l2", "std"),
-        final_gen_gap_mean=("gen_gap", "mean"),
-        final_gen_gap_std=("gen_gap", "std"),
-    ).reset_index()
-    table = add_mean_std_display(
-        table,
-        [
-            "final_step_mass",
-            "final_iid_acc",
-            "final_shift_acc",
-            "final_probe_train_gain",
-            "final_probe_eval_gain",
-            "final_probe_param_shift_l2",
-            "final_gen_gap",
-        ],
-    )
-    table.to_csv(os.path.join(output_dir, "a_axis_summary.csv"), index=False)
-
     cap_final = final_rows[final_rows["policy"] == "cap"][[
         "seed",
         "step_mass",
@@ -305,9 +278,11 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
         "probe_param_shift_l2",
         "gen_gap",
     ]]
-    no_cap_at_budget = budget_rows[budget_rows["policy"] == "no_cap"][[
+    cap_final = cap_final.assign(budget_gap=0.0)
+    no_cap_final = final_rows[final_rows["policy"] == "no_cap"][[
         "seed",
         "step_mass",
+        "budget_gap",
         "test_iid_acc",
         "test_shift_acc",
         "probe_train_gain",
@@ -315,9 +290,10 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
         "probe_param_shift_l2",
         "gen_gap",
     ]]
-    no_cap_final = final_rows[final_rows["policy"] == "no_cap"][[
+    no_cap_first_overrun = overrun_rows[[
         "seed",
         "step_mass",
+        "budget_gap",
         "test_iid_acc",
         "test_shift_acc",
         "probe_train_gain",
@@ -328,13 +304,15 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
 
     rebuttal_rows = [
         cap_final.assign(summary_row="cap_at_budget"),
-        no_cap_at_budget.assign(summary_row="no_cap_at_budget"),
+        no_cap_first_overrun.assign(summary_row="no_cap_first_overrun"),
         no_cap_final.assign(summary_row="no_cap_final"),
     ]
     rebuttal = pd.concat(rebuttal_rows, ignore_index=True)
     rebuttal_table = rebuttal.groupby("summary_row").agg(
         step_mass_mean=("step_mass", "mean"),
         step_mass_std=("step_mass", "std"),
+        budget_gap_mean=("budget_gap", "mean"),
+        budget_gap_std=("budget_gap", "std"),
         iid_acc_mean=("test_iid_acc", "mean"),
         iid_acc_std=("test_iid_acc", "std"),
         shift_acc_mean=("test_shift_acc", "mean"),
@@ -352,6 +330,7 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
         rebuttal_table,
         [
             "step_mass",
+            "budget_gap",
             "iid_acc",
             "shift_acc",
             "probe_train_gain",
@@ -362,22 +341,31 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
     )
     rebuttal_table.to_csv(os.path.join(output_dir, "a_axis_rebuttal_table.csv"), index=False)
 
-    no_cap_budget_vs_final = no_cap_final.merge(no_cap_at_budget, on="seed", suffixes=("_final", "_at_budget"))
+    no_cap_budget_vs_final = no_cap_final.merge(budget_rows[budget_rows["policy"] == "no_cap"], on="seed", suffixes=("_final", "_at_budget"))
+    no_cap_overrun_vs_budget = no_cap_first_overrun.merge(budget_rows[budget_rows["policy"] == "no_cap"], on="seed", suffixes=("_first_overrun", "_at_budget"))
     excess_table = pd.DataFrame(
         [
             {
                 "policy": "no_cap",
                 "paired_seed_count": len(no_cap_budget_vs_final),
+                "first_overrun_step_mass_mean": no_cap_overrun_vs_budget["step_mass_first_overrun"].mean(),
+                "first_overrun_budget_gap_mean": no_cap_overrun_vs_budget["budget_gap_first_overrun"].mean(),
                 "step_mass_at_budget_mean": no_cap_budget_vs_final["step_mass_at_budget"].mean(),
                 "step_mass_final_mean": no_cap_budget_vs_final["step_mass_final"].mean(),
+                "shift_acc_first_overrun_mean": no_cap_overrun_vs_budget["test_shift_acc_first_overrun"].mean(),
                 "gen_gap_at_budget_mean": no_cap_budget_vs_final["gen_gap_at_budget"].mean(),
                 "gen_gap_final_mean": no_cap_budget_vs_final["gen_gap_final"].mean(),
+                "gen_gap_first_overrun_mean": no_cap_overrun_vs_budget["gen_gap_first_overrun"].mean(),
+                "gen_gap_first_overrun_excess_mean": (no_cap_overrun_vs_budget["gen_gap_first_overrun"] - no_cap_overrun_vs_budget["gen_gap_at_budget"]).mean(),
                 "gen_gap_excess_mean": (no_cap_budget_vs_final["gen_gap_final"] - no_cap_budget_vs_final["gen_gap_at_budget"]).mean(),
                 "shift_acc_at_budget_mean": no_cap_budget_vs_final["test_shift_acc_at_budget"].mean(),
                 "shift_acc_final_mean": no_cap_budget_vs_final["test_shift_acc_final"].mean(),
+                "shift_acc_first_overrun_excess_mean": (no_cap_overrun_vs_budget["test_shift_acc_first_overrun"] - no_cap_overrun_vs_budget["test_shift_acc_at_budget"]).mean(),
                 "shift_acc_excess_mean": (no_cap_budget_vs_final["test_shift_acc_final"] - no_cap_budget_vs_final["test_shift_acc_at_budget"]).mean(),
                 "probe_eval_gain_at_budget_mean": no_cap_budget_vs_final["probe_eval_gain_at_budget"].mean(),
                 "probe_eval_gain_final_mean": no_cap_budget_vs_final["probe_eval_gain_final"].mean(),
+                "probe_eval_gain_first_overrun_mean": no_cap_overrun_vs_budget["probe_eval_gain_first_overrun"].mean(),
+                "probe_eval_gain_first_overrun_excess_mean": (no_cap_overrun_vs_budget["probe_eval_gain_first_overrun"] - no_cap_overrun_vs_budget["probe_eval_gain_at_budget"]).mean(),
                 "probe_eval_gain_excess_mean": (no_cap_budget_vs_final["probe_eval_gain_final"] - no_cap_budget_vs_final["probe_eval_gain_at_budget"]).mean(),
             }
         ]
@@ -386,9 +374,9 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
 
     paired_budget = make_paired_wins(
         left=cap_final,
-        right=no_cap_at_budget,
-        left_name="cap",
-        right_name="no_cap_at_budget",
+        right=no_cap_first_overrun,
+        left_name="cap_at_budget",
+        right_name="no_cap_first_overrun",
         metrics=[
             ("test_iid_acc", True),
             ("test_shift_acc", True),
@@ -397,8 +385,20 @@ def plot_a_axis(input_dir: str, output_dir: str) -> None:
             ("gen_gap", False),
         ],
     )
-    paired_budget.to_csv(os.path.join(output_dir, "a_axis_paired_wins.csv"), index=False)
-
+    paired_final = make_paired_wins(
+        left=cap_final,
+        right=no_cap_final,
+        left_name="cap_at_budget",
+        right_name="no_cap_final",
+        metrics=[
+            ("test_iid_acc", True),
+            ("test_shift_acc", True),
+            ("probe_train_gain", True),
+            ("probe_eval_gain", True),
+            ("gen_gap", False),
+        ],
+    )
+    pd.concat([paired_budget, paired_final], ignore_index=True).to_csv(os.path.join(output_dir, "a_axis_paired_wins.csv"), index=False)
 
 
 def main() -> None:

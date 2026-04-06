@@ -32,8 +32,11 @@ class AdaptiveMLP(nn.Module):
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(last_dim, 1)
 
+    def features(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.backbone(x)).squeeze(-1)
+        return self.head(self.features(x)).squeeze(-1)
 
 
 class TeachabilityMLP(nn.Module):
@@ -67,10 +70,8 @@ def make_loader(split: Tuple[torch.Tensor, torch.Tensor], batch_size: int, shuff
     return DataLoader(TensorDataset(split[0], split[1]), batch_size=batch_size, shuffle=shuffle)
 
 
-
 def clone_model(model: nn.Module) -> nn.Module:
     return copy.deepcopy(model)
-
 
 
 def evaluate_classifier(
@@ -99,7 +100,6 @@ def evaluate_classifier(
         "loss": total_loss / max(total_count, 1),
         "acc": total_correct / max(total_count, 1),
     }
-
 
 
 def fit_classifier(
@@ -132,7 +132,6 @@ def fit_classifier(
     return model
 
 
-
 def evaluate_all_splits(
     model: nn.Module,
     bundle: SplitBundle,
@@ -157,6 +156,96 @@ def evaluate_all_splits(
     return metrics
 
 
+def residual_logits(model: nn.Module, adapter: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    with torch.no_grad():
+        feats = model.features(x)
+        if isinstance(model, TeachabilityMLP):
+            base_logits = model.task_head(feats)
+        else:
+            base_logits = model.head(feats)
+    return (base_logits + adapter(feats)).squeeze(-1)
+
+
+def evaluate_residual_classifier(
+    model: nn.Module,
+    adapter: nn.Module,
+    split: Tuple[torch.Tensor, torch.Tensor],
+    device: torch.device,
+    batch_size: int = 256,
+) -> Dict[str, float]:
+    loader = make_loader(split, batch_size=batch_size, shuffle=False)
+    criterion = nn.BCEWithLogitsLoss()
+    model.eval()
+    adapter.eval()
+    total_loss = 0.0
+    total_correct = 0.0
+    total_count = 0
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device)
+            y = y.to(device)
+            logits = residual_logits(model, adapter, x)
+            loss = criterion(logits, y)
+            preds = (torch.sigmoid(logits) >= 0.5).float()
+            total_loss += loss.item() * x.size(0)
+            total_correct += (preds == y).float().sum().item()
+            total_count += x.size(0)
+    return {
+        "loss": total_loss / max(total_count, 1),
+        "acc": total_correct / max(total_count, 1),
+    }
+
+
+def make_frozen_projector(in_features: int, out_features: int, device: torch.device) -> nn.Linear:
+    projector = nn.Linear(in_features, out_features, bias=False).to(device)
+    nn.init.normal_(projector.weight, mean=0.0, std=1.0 / max(in_features, 1) ** 0.5)
+    for parameter in projector.parameters():
+        parameter.requires_grad = False
+    return projector
+
+
+def projected_residual_logits(model: nn.Module, projector: nn.Module, adapter: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    with torch.no_grad():
+        feats = model.features(x)
+        projected = projector(feats)
+        if isinstance(model, TeachabilityMLP):
+            base_logits = model.task_head(feats)
+        else:
+            base_logits = model.head(feats)
+    return (base_logits + adapter(projected)).squeeze(-1)
+
+
+def evaluate_projected_residual_classifier(
+    model: nn.Module,
+    projector: nn.Module,
+    adapter: nn.Module,
+    split: Tuple[torch.Tensor, torch.Tensor],
+    device: torch.device,
+    batch_size: int = 256,
+) -> Dict[str, float]:
+    loader = make_loader(split, batch_size=batch_size, shuffle=False)
+    criterion = nn.BCEWithLogitsLoss()
+    model.eval()
+    projector.eval()
+    adapter.eval()
+    total_loss = 0.0
+    total_correct = 0.0
+    total_count = 0
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device)
+            y = y.to(device)
+            logits = projected_residual_logits(model, projector, adapter, x)
+            loss = criterion(logits, y)
+            preds = (torch.sigmoid(logits) >= 0.5).float()
+            total_loss += loss.item() * x.size(0)
+            total_correct += (preds == y).float().sum().item()
+            total_count += x.size(0)
+    return {
+        "loss": total_loss / max(total_count, 1),
+        "acc": total_correct / max(total_count, 1),
+    }
+
 
 def correction_audit(
     model: nn.Module,
@@ -166,31 +255,37 @@ def correction_audit(
     steps: int,
     lr: float,
     batch_size: int,
+    adapter_rank: int = 8,
     weight_decay: float = 0.0,
 ) -> Dict[str, float]:
     audited = clone_model(model).to(device)
-    before = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
-    optimizer = torch.optim.SGD(audited.parameters(), lr=lr, momentum=0.0, weight_decay=weight_decay)
+    for parameter in audited.parameters():
+        parameter.requires_grad = False
+    projector = make_frozen_projector(audited.head.in_features, adapter_rank, device)
+    adapter = nn.Linear(adapter_rank, 1, bias=False).to(device)
+    nn.init.zeros_(adapter.weight)
+    before = evaluate_projected_residual_classifier(audited, projector, adapter, correction_eval_split, device, batch_size=batch_size)
+    optimizer = torch.optim.SGD(adapter.parameters(), lr=lr, momentum=0.0, weight_decay=weight_decay)
     criterion = nn.BCEWithLogitsLoss()
     loader = make_loader(correction_split, batch_size=batch_size, shuffle=True)
     batches = list(loader)
-    audited.train()
-    train_before = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
-    before_params = [parameter.detach().clone() for parameter in audited.parameters()]
-    audited.train()
+    audited.eval()
+    train_before = evaluate_projected_residual_classifier(audited, projector, adapter, correction_split, device, batch_size=batch_size)
+    before_params = [parameter.detach().clone() for parameter in adapter.parameters()]
+    adapter.train()
     for step_idx in range(steps):
         x, y = batches[step_idx % len(batches)]
         x = x.to(device)
         y = y.to(device)
         optimizer.zero_grad(set_to_none=True)
-        logits = audited(x)
+        logits = projected_residual_logits(audited, projector, adapter, x)
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
-    train_after = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
-    after = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
+    train_after = evaluate_projected_residual_classifier(audited, projector, adapter, correction_split, device, batch_size=batch_size)
+    after = evaluate_projected_residual_classifier(audited, projector, adapter, correction_eval_split, device, batch_size=batch_size)
     param_shift_sq = 0.0
-    for before_param, after_param in zip(before_params, audited.parameters()):
+    for before_param, after_param in zip(before_params, adapter.parameters()):
         delta = after_param.detach() - before_param
         param_shift_sq += float(torch.sum(delta * delta).item())
     return {
@@ -213,7 +308,6 @@ def correction_audit(
     }
 
 
-
 def teachability_probe(
     model: TeachabilityMLP,
     correction_split: Tuple[torch.Tensor, torch.Tensor],
@@ -231,28 +325,28 @@ def teachability_probe(
         parameter.requires_grad = False
     for parameter in audited.correction_head.parameters():
         parameter.requires_grad = True
-    before = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
+    before = evaluate_residual_classifier(audited, audited.correction_head, correction_eval_split, device, batch_size=batch_size)
     optimizer = torch.optim.SGD(audited.correction_head.parameters(), lr=lr * lr_scale, momentum=0.0)
     criterion = nn.BCEWithLogitsLoss()
     loader = make_loader(correction_split, batch_size=batch_size, shuffle=True)
     batches = list(loader)
-    audited.train()
-    train_before = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
-    before_params = [parameter.detach().clone() for parameter in audited.parameters()]
-    audited.train()
+    audited.eval()
+    train_before = evaluate_residual_classifier(audited, audited.correction_head, correction_split, device, batch_size=batch_size)
+    before_params = [parameter.detach().clone() for parameter in audited.correction_head.parameters()]
+    audited.correction_head.train()
     for step_idx in range(steps):
         x, y = batches[step_idx % len(batches)]
         x = x.to(device)
         y = y.to(device)
         optimizer.zero_grad(set_to_none=True)
-        logits = audited(x)
+        logits = residual_logits(audited, audited.correction_head, x)
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
-    train_after = evaluate_classifier(audited, correction_split, device, batch_size=batch_size)
-    after = evaluate_classifier(audited, correction_eval_split, device, batch_size=batch_size)
+    train_after = evaluate_residual_classifier(audited, audited.correction_head, correction_split, device, batch_size=batch_size)
+    after = evaluate_residual_classifier(audited, audited.correction_head, correction_eval_split, device, batch_size=batch_size)
     param_shift_sq = 0.0
-    for before_param, after_param in zip(before_params, audited.parameters()):
+    for before_param, after_param in zip(before_params, audited.correction_head.parameters()):
         delta = after_param.detach() - before_param
         param_shift_sq += float(torch.sum(delta * delta).item())
     return {
@@ -274,7 +368,6 @@ def teachability_probe(
         "probe_post_loss": after["loss"],
         "probe_train_acc": train_after["acc"],
     }
-
 
 
 def fit_task_only(
@@ -313,7 +406,6 @@ def fit_task_only(
     return model
 
 
-
 def evaluate_teachability_model(
     model: TeachabilityMLP,
     bundle: SplitBundle,
@@ -336,7 +428,6 @@ def evaluate_teachability_model(
     }
 
 
-
 def make_shortcut_split(
     n: int,
     input_dim: int,
@@ -356,13 +447,12 @@ def make_shortcut_split(
     x = np.zeros((n, input_dim), dtype=np.float32)
     x[:, 0] = base_score + feature_noise * rng.normal(size=n)
     x[:, 1] = latent[:, 0] - latent[:, 1] + feature_noise * rng.normal(size=n)
-    x[:, 2] = shortcut_alignment * shortcut_strength * (2.0 * y - 1.0) + feature_noise * rng.normal(size=n)
+    x[:, 2] = shortcut_alignment * shortcut_strength * (2.0 * clean_y - 1.0) + feature_noise * rng.normal(size=n)
     x[:, 3] = 0.6 * latent[:, 1] + 0.4 * latent[:, 2] + feature_noise * rng.normal(size=n)
     for idx in range(4, input_dim):
         x[:, idx] = feature_noise * rng.normal(size=n)
 
     return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
-
 
 
 def make_split_bundle(
@@ -376,6 +466,9 @@ def make_split_bundle(
     label_noise: float,
     feature_noise: float,
     seed: int,
+    shift_alignment: float = 0.0,
+    correction_alignment: float = 0.0,
+    correction_eval_alignment: float = 0.0,
 ) -> SplitBundle:
     rng = np.random.default_rng(seed)
     train = make_shortcut_split(
@@ -409,7 +502,7 @@ def make_split_bundle(
         n=n_shift,
         input_dim=input_dim,
         shortcut_strength=shortcut_strength,
-        shortcut_alignment=-1.0,
+        shortcut_alignment=shift_alignment,
         label_noise=label_noise,
         feature_noise=feature_noise,
         rng=rng,
@@ -418,7 +511,7 @@ def make_split_bundle(
         n=n_correction,
         input_dim=input_dim,
         shortcut_strength=shortcut_strength,
-        shortcut_alignment=-1.0,
+        shortcut_alignment=correction_alignment,
         label_noise=label_noise,
         feature_noise=feature_noise,
         rng=rng,
@@ -427,7 +520,7 @@ def make_split_bundle(
         n=max(n_shift, 256),
         input_dim=input_dim,
         shortcut_strength=shortcut_strength,
-        shortcut_alignment=-1.0,
+        shortcut_alignment=correction_eval_alignment,
         label_noise=label_noise,
         feature_noise=feature_noise,
         rng=rng,

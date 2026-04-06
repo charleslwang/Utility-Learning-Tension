@@ -89,7 +89,6 @@ def fieldnames() -> List[str]:
     ]
 
 
-
 def evaluate_candidate(args: argparse.Namespace, seed: int, width: int, device) -> Dict[str, float]:
     bundle = make_split_bundle(
         m=args.m,
@@ -102,6 +101,9 @@ def evaluate_candidate(args: argparse.Namespace, seed: int, width: int, device) 
         label_noise=args.label_noise,
         feature_noise=args.feature_noise,
         seed=seed,
+        shift_alignment=args.shift_alignment,
+        correction_alignment=args.correction_alignment,
+        correction_eval_alignment=args.correction_eval_alignment,
     )
     model = build_model(args.input_dim, width, args.depth, args.dropout)
     model = fit_classifier(
@@ -127,7 +129,6 @@ def evaluate_candidate(args: argparse.Namespace, seed: int, width: int, device) 
     )
     metrics.update(audit)
     return metrics
-
 
 
 def make_row(seed: int, args: argparse.Namespace, proposal_step: int, width: int, accepted: bool, cap_ok: bool, val_ok: bool, width_cap: int, eps_v: float, tau: float, candidate: Dict[str, float], active: Dict[str, float]) -> Dict[str, float]:
@@ -197,7 +198,6 @@ def make_row(seed: int, args: argparse.Namespace, proposal_step: int, width: int
     }
 
 
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", choices=["twogate", "dest_train", "dest_val", "dest_val_nocap"], required=True)
@@ -222,13 +222,16 @@ def main() -> None:
     parser.add_argument("--optimizer", choices=["adamw", "sgd"], default="adamw")
     parser.add_argument("--K_mult", type=float, default=1.1)
     parser.add_argument("--K_override", type=int, default=None)
-    parser.add_argument("--c0", type=float, default=0.12)
-    parser.add_argument("--tau_mult", type=float, default=0.35)
+    parser.add_argument("--c0", type=float, default=0.08)
+    parser.add_argument("--tau_mult", type=float, default=0.15)
     parser.add_argument("--delta_v", type=float, default=0.05)
     parser.add_argument("--correction_steps", type=int, default=12)
     parser.add_argument("--correction_lr", type=float, default=0.08)
     parser.add_argument("--correction_batch_size", type=int, default=32)
     parser.add_argument("--correction_weight_decay", type=float, default=0.0)
+    parser.add_argument("--shift_alignment", type=float, default=-0.35)
+    parser.add_argument("--correction_alignment", type=float, default=0.0)
+    parser.add_argument("--correction_eval_alignment", type=float, default=0.0)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--output_dir", type=str, default="experiments/outputs")
     args = parser.parse_args()
