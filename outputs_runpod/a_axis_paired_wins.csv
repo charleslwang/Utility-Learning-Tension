@@ -1,6 +1,0 @@
-left_policy,right_policy,metric,paired_seed_count,left_mean,right_mean,left_minus_right_mean,left_wins,right_wins,ties
-cap,no_cap_at_budget,test_iid_acc,48,0.9965565999348959,0.9965565999348959,0.0,0,0,48
-cap,no_cap_at_budget,test_shift_acc,48,0.017420450846354168,0.017420450846354168,0.0,0,0,48
-cap,no_cap_at_budget,probe_train_gain,48,0.9718749999999999,0.9718749999999999,0.0,0,0,48
-cap,no_cap_at_budget,probe_eval_gain,48,0.9707285563151041,0.9707285563151041,0.0,0,0,48
-cap,no_cap_at_budget,gen_gap,48,0.004833350101459131,0.004833350101459131,0.0,0,0,48
